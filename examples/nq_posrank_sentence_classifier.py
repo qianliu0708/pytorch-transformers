@@ -115,7 +115,7 @@ if __name__ == '__main__':
     label_file = "/data/nieping/pytorch-transformers/data/nq_sentence_selector/train_5_piece/train5piece_short_label.pk"
     example_labels = pickle.load(open(label_file,"rb"))#read_annotation_for_trainingzip
     all_sents = []
-    for i in range(1):
+    for i in range(4):
         file = "/data/nieping/pytorch-transformers/data/nq_sentence_selector/train_5_piece/train5piece_nbest_predwithsent_{}.pk".format(i)
         print("pred_with_sent_file:",file)
         all_sents.extend(convert_predwithsent_cls_format(example_labels,file))
@@ -133,7 +133,7 @@ if __name__ == '__main__':
     print("Finised dump:",args.output_file)
 
     with open(args.output_file, 'w', encoding='utf-8') as fout:
-        for example in all_sents[0:100]:
+        for example in all_sents:
             fout.write(json.dumps(example) + '\n')
 
     print("Finised dump:", args.output_file)
