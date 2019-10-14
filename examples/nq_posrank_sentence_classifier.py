@@ -124,7 +124,7 @@ if __name__ == '__main__':
     count_has = 0
     count_no = 0
     for sent in all_sents:
-        if sent["sent_label"]:
+        if sent["label"]:
             count_has+=1
         else:
             count_no+=1
