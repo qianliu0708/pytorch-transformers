@@ -133,7 +133,7 @@ if __name__ == '__main__':
     print("Finised dump:",args.output_file)
 
     with open(args.output_file, 'w', encoding='utf-8') as fout:
-        for example in all_sents:
+        for example in all_sents[0:100]:
             fout.write(json.dumps(example) + '\n')
-            exit()
+            
     print("Finised dump:", args.output_file)
