@@ -83,7 +83,7 @@ def convert_predwithsent_cls_format(example_labels,predwithsent_files):
                 'question': question,
                 'sentence': sent,
                 'sent_span': span,
-                'sent_label':sent_label,
+                'label':sent_label,
             })
     print("no annotation examples:",count_no_annotation_examples)
     print("has annotation examples:",count_has_annotation_examples)
@@ -119,7 +119,7 @@ if __name__ == '__main__':
         file = "/data/nieping/pytorch-transformers/data/nq_sentence_selector/train_5_piece/train5piece_nbest_predwithsent_{}.pk".format(i)
         print("pred_with_sent_file:",file)
         all_sents.extend(convert_predwithsent_cls_format(example_labels,file))
-    pickle.dump(all_sents,open(args.output_file,"wb"))
+    # pickle.dump(all_sents,open(args.output_file,"wb"))
     print("Total sents:",len(all_sents))
     count_has = 0
     count_no = 0
@@ -131,3 +131,7 @@ if __name__ == '__main__':
     print("\t positive sent:",count_has)
     print("\t negative sent:",count_no)
     print("Finised dump:",args.output_file)
+    with open(args.output_file, 'w', encoding='utf-8') as fout:
+        for example in all_sents:
+            fout.write(json.dumps(example) + '\n')
+    print("Finised dump:", args.output_file)
