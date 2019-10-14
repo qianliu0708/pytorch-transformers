@@ -73,10 +73,10 @@ def convert_predwithsent_cls_format(example_labels,predwithsent_files):
 
         for (sent,span) in sents_dict.items():
             if label[-1] and label[0] >= span[0] and label[1] <= span[1]:
-                sent_label = 1
+                sent_label = '1'
                 count_has_answer+=1
             else:
-                sent_label = 0
+                sent_label = '0'
                 count_no_answer+=1
             all_sents_examples.append({
                 'id':int(eid),
@@ -124,7 +124,7 @@ if __name__ == '__main__':
     count_has = 0
     count_no = 0
     for sent in all_sents:
-        if sent["label"]:
+        if sent["label"] == '1':
             count_has+=1
         else:
             count_no+=1
