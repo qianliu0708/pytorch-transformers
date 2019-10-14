@@ -131,7 +131,9 @@ if __name__ == '__main__':
     print("\t positive sent:",count_has)
     print("\t negative sent:",count_no)
     print("Finised dump:",args.output_file)
+
     with open(args.output_file, 'w', encoding='utf-8') as fout:
         for example in all_sents:
             fout.write(json.dumps(example) + '\n')
+            exit()
     print("Finised dump:", args.output_file)
