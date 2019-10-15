@@ -23,9 +23,8 @@ def _open(path):
 
 def read_annotation_for_traingzip(input_files):
     train_annos_short = []
-    print("start:",input_files)
-    from tqdm import tqdm
-    for input_file in tqdm(input_files):
+    print("Start:",input_files)
+    for input_file in input_files:
         with _open(input_file) as input_jsonl:
             for line in input_jsonl:
                 e = json.loads(line, object_pairs_hook=collections.OrderedDict)
