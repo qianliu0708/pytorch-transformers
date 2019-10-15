@@ -388,7 +388,8 @@ def convert_predwithsent_cls_format_train(all_pred_with_sent_data,example_labels
 def npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict):
     count_all_sents = 0
     global_id = 10000000000
-
+    nbest_pred_with_sent = []
+    sentlist = []
     from tqdm import tqdm
     for (eid, nbest_pred) in tqdm(all_nbest_predictions.items()):
         example = all_examples_dict[eid]
@@ -409,8 +410,7 @@ def npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict):
         sent_ends.append(len(doc_tokens) + 1)
         sent_spans = list(zip(sent_starts, sent_ends))  # print(" ".join(doc_tokens[start:end]))
         # ---------------------------------------------------
-        nbest_pred_with_sent = []
-        sentlist = []
+
         for ans in nbest_pred:
             ans["sentence"] = ""
 
@@ -581,7 +581,7 @@ if __name__ == '__main__':
                                                                     verbose_logging=False,
                                                                     version_2_with_negative=True,
                                                                     nbest_pred_file=nbest_pk_file)
-
+    print("LQ1:",len(all_nq_prediction),len(all_nbest_predictions))
     if args.is_training:
         #--------------------step2:gent the sentence for each answer---------------
         nbest_pred_with_sents = npred_2_npredwithsent_Train(all_nbest_predictions,all_examples_dict)
