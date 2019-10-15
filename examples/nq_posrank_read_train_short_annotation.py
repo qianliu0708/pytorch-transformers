@@ -15,27 +15,27 @@ from functools import partial
 import logging
 logger = logging.getLogger(__name__)
 
-def read_annotation_for_traingzip(input_files):
+def read_annotation_for_traingzip(input_file):
     train_annos_short = []
-    print("Start:",input_files)
-    for input_file in input_files:
-        with gzip.open(input_file, "r") as input_jsonl:
-            for line in input_jsonl:
-                e = json.loads(line, object_pairs_hook=collections.OrderedDict)
-                eid = e["example_id"]
-                anno = e["annotations"][0]
-                question = " ".join(e["question_tokens"])
-                short_ans = anno["short_answers"]
-                if len(short_ans) == 0:
-                    train_annos_short.append([eid,-1, -1, False])
+    print("Start:",input_file)
+    # for input_file in input_files:
+    with gzip.open(input_file, "r") as input_jsonl:
+        for line in input_jsonl:
+            e = json.loads(line, object_pairs_hook=collections.OrderedDict)
+            eid = e["example_id"]
+            anno = e["annotations"][0]
+            question = " ".join(e["question_tokens"])
+            short_ans = anno["short_answers"]
+            if len(short_ans) == 0:
+                train_annos_short.append([eid,-1, -1, False])
+            else:
+                answer = short_ans[0]
+                start_tok = answer["start_token"]
+                end_tok = answer["end_token"]
+                if start_tok == -1 or end_tok == -1:
+                    train_annos_short.append( [eid,start_tok, end_tok, False])
                 else:
-                    answer = short_ans[0]
-                    start_tok = answer["start_token"]
-                    end_tok = answer["end_token"]
-                    if start_tok == -1 or end_tok == -1:
-                        train_annos_short.append( [eid,start_tok, end_tok, False])
-                    else:
-                        train_annos_short.append( [eid,start_tok, end_tok, True])
+                    train_annos_short.append( [eid,start_tok, end_tok, True])
     # print("total examples", len(example_short_anno))
     return train_annos_short
 
