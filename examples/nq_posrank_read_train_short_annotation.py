@@ -74,7 +74,7 @@ if __name__ == '__main__':
     # -------------------------------------generated labels-------------------------------------------
 
     input_files = []
-    for path in glob.glob("{}/*.gz".format(args.gzip_dir)):
+    for path in glob.glob("{}/*.gz".format(args.input_gzip_dir)):
         input_files.append(path)
     print("Total gzips:", len(input_files))
 
