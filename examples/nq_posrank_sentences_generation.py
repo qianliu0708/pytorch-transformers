@@ -347,10 +347,10 @@ def convert_predwithsent_cls_format_train(all_pred_with_sent_data,example_labels
             continue
 
         for ana in ans_list:
-            if ana["sent"] in sents_dict:
+            if ana["sentence"] in sents_dict:
                 continue
             else:
-                sents_dict[ana["sent"]] = [ana["sent_start_nq_idx"],ana["sent_end_nq_idx"]]
+                sents_dict[ana["sentence"]] = [ana["sent_start_nq_idx"],ana["sent_end_nq_idx"]]
 
         for (sent,span) in sents_dict.items():
             if label[-1] and label[0] >= span[0] and label[1] <= span[1]:
@@ -374,6 +374,29 @@ def convert_predwithsent_cls_format_train(all_pred_with_sent_data,example_labels
     return all_sents_examples
 
 
+def convert_predwithsent_cls_format_dev(all_pred_with_sent_data):
+    '''
+    :param predwithsent_files: a dict {example_id:{generated from nq_posrank_Sentences_generation}}
+    :return:
+    '''
+    my_id = 1000000000000000
+    all_eval_examples = []
+    # data = pickle.load(open(predwithsent_files,"rb"))
+    for (eid,ans_list) in all_pred_with_sent_data.items():
+        question = ans_list[0]["question"]
+        for ans in ans_list:
+            my_id +=1
+            ans["id"] = my_id
+            ans["eid"] = eid
+            ans["question"] = question
+            all_eval_examples.append(ans)
+    print("all eval examples:",len(all_eval_examples))
+
+    return all_eval_examples
+
+
+
+
 
 if __name__ == '__main__':
 
@@ -384,10 +407,18 @@ if __name__ == '__main__':
     parser.add_argument("--example_pk_file", default=None, type=str, required=True)
     parser.add_argument("--feature_pk_file", default=None, type=str, required=True)
     parser.add_argument("--results_pk_file", default=None, type=str, required=True)
-    parser.add_argument("--output_nbest_pk_file", default=None, type=str, required=True)
+
     parser.add_argument("--output_pred_file", default=None, type=str, required=True)
+    parser.add_argument("--output_nbest_pk_file", default=None, type=str, required=True)
     parser.add_argument("--output_nbest_pred_with_sent_file", default=None, type=str, required=True)
+
+
+    parser.add_argument("--train_anno_file", default=None, type=str)
+    parser.add_argument("--is_training", action='store_true')
+    parser.add_argument("--output_cls_file", default=None, type=str, required=True)
     args = parser.parse_args()
+    if args.is_training:
+        assert args.train_anno_file != None
     #--------------------------------------input files-----------------------------------------
     example_file = args.example_pk_file
     feature_file = args.feature_pk_file
@@ -414,7 +445,6 @@ if __name__ == '__main__':
     all_examples_dict = {}
     for e in all_examples:
         all_examples_dict[e.qas_id] = e
-    #
     # #----------------------------------output files-------------------------------------------
     output_prediction_file = one_pred_json_file
     all_nq_prediction, all_nbest_predictions = write_nq_predictions(all_examples, all_features, all_results,
@@ -480,7 +510,7 @@ if __name__ == '__main__':
                             end_of_sentence = sent_ends[i+1]
                             break
                 sentlist.append(" ".join(doc_tokens[start_of_sentence:end_of_sentence]))
-                ans["sent"] = " ".join(doc_tokens[start_of_sentence:end_of_sentence])
+                ans["sentence"] = " ".join(doc_tokens[start_of_sentence:end_of_sentence])
                 ans["sent_start_doc_token_idx"] = start_of_sentence
                 ans["sent_end_doc_token_idx"] = end_of_sentence-2
                 ans["sent_start_nq_idx"] = example.nq_context_map[start_of_sentence]
@@ -490,10 +520,10 @@ if __name__ == '__main__':
                 ans["doc_tokens_nqidx_map"] = example.nq_context_map
 
                 nbest_pred_with_sent.append(ans)
-                if ans["sent"]=="":
+                if ans["sentence"]=="":
                     print("!")
-                if ans["text"] not in ans["sent"]:
-                    print("answer: {}, sent: {}".format(ans["text"],ans["sent"]))
+                if ans["text"] not in ans["sentence"]:
+                    print("answer: {}, sent: {}".format(ans["text"],ans["sentence"]))
 
         all_nbest_pred_with_sents[eid] = nbest_pred_with_sent
         count_all_sents += len(set(sentlist))
@@ -506,5 +536,11 @@ if __name__ == '__main__':
     #-----------------------------------from predwithsent to clsformat----------------------
 
     if args.is_training:
-        convert_predwithsent_cls_format_train(all_nbest_pred_with_sents,example_labels)
+        example_labels = pickle.load(open(args.train_anno_file,"rb"))#add label
+        all_train_examples_cls = convert_predwithsent_cls_format_train(all_nbest_pred_with_sents,example_labels)
+        pickle.dump(all_train_examples_cls,open(args.output_cls_file,"wb"))
+    else:
+        all_dev_examples_cls = convert_predwithsent_cls_format_dev(all_nbest_pred_with_sents)
+        pickle.dump(all_dev_examples_cls, open(args.output_cls_file, "wb"))
+
 

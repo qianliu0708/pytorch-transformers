@@ -3,17 +3,22 @@ import argparse
 import gzip
 import json
 import collections
-import os
-import re
 import glob
 from multiprocessing import cpu_count
 Thread_num = cpu_count()
 print("Thread_num",Thread_num)
-import multiprocessing
 from multiprocessing import Pool
 from functools import partial
 import logging
 logger = logging.getLogger(__name__)
+
+'''
+All train gzips:
+read each line
+and return a list about the short answer:
+[eid,start_token,end_token,True/False]
+Last one is whether has a short answer
+'''
 
 def read_annotation_for_traingzip(input_file):
     train_annos_short = []
@@ -36,7 +41,7 @@ def read_annotation_for_traingzip(input_file):
                     train_annos_short.append( [eid,start_tok, end_tok, False])
                 else:
                     train_annos_short.append( [eid,start_tok, end_tok, True])
-    # print("total examples", len(example_short_anno))
+    print("End {} and total examples {}".format(input_file, len(train_annos_short)))
     return train_annos_short
 
 def multiple_read(all_input_files):
@@ -67,8 +72,6 @@ if __name__ == '__main__':
     annoted_short_labels = multiple_read(input_files)#[[eid,starttok,endtok,True/False(has answer)]]
 
 
-    pickle.dump(annoted_short_labels, open(args.output_file, "wb"))
-    print("Dumpted annotations into {}".format(args.output_file))
     count_has_short =0
     count_no_short = 0
     for e in annoted_short_labels:
@@ -79,3 +82,9 @@ if __name__ == '__main__':
     print("has short ans:",count_has_short)
     print("no short ans:",count_no_short)
 
+    annoted_short_labels_dict = {}
+    for e in annoted_short_labels:
+        annoted_short_labels_dict[e[0]] = e[1:]
+    pickle.dump(annoted_short_labels_dict, open("all_train_short_labels_dict.pk", "wb"))
+
+    print("Dumpted annotations into {}".format(args.output_file))
