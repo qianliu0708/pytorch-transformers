@@ -46,23 +46,21 @@ def read_annotation_for_traingzip(input_files):
     return train_annos_short
 
 def multiple_read(all_input_files):
-    logger.info('Multiprocessing!')
+    print('Multiprocessing!')
     features_initial = []
     with Pool(Thread_num) as p:
         annotate = partial(read_annotation_for_traingzip)
 
         piece_num = int(len(all_input_files) / Thread_num)
         example_chunks = [all_input_files[start:start + piece_num] for start in range(0, len(all_input_files), piece_num)]
-        logger.info('total chunks: {}'.format(len(example_chunks)))
+        print('total chunks: {}'.format(len(example_chunks)))
 
         for chunk_id, examples_part in enumerate(example_chunks):
             from tqdm import tqdm
             features_partial = list(tqdm(p.imap(annotate, examples_part),total=len(examples_part),desc="reading gzips"))
             features_initial.extend(features_partial)
-            logger.info('processing chunk {}'.format(chunk_id))
+            print('processing chunk {}'.format(chunk_id))
     return features_initial
-
-
 
 
 if __name__ == '__main__':
