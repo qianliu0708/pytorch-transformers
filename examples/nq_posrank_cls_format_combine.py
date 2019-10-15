@@ -29,3 +29,12 @@ if __name__ == '__main__':
     examples_num = len(list(set(examples_ids)))
     print("Total nq_examples:",examples_num)
     print("Averaged:", len(all_sents)/examples_num)
+
+    """
+    227705
+OrderedDict([('text', 'J.J. Thomson'), ('start_logit', 2.622042655944824), ('end_logit', 3.1629788875579834), ('start_short_idx', 2157), ('end_short_idx', 2158), ('start_long_idx', 2094), ('end_long_idx', 2342), ('sentence', 'This was first demonstrated by J.J. Thomson in 1897 when , using a cathode ray tube , he found that an electrical charge would travel across a vacuum ( which would possess infinite resistance in classical theory ) .'), ('question', 'who proposed that electrons behave like waves and particles'), ('example_id', '-5501481664893105662'), ('id', 10000000000)])
+Finised dump: /data/nieping/pytorch-transformers/data/nq_sentence_selector/dev_all/dev_predwithsent_cls_all.json
+Total sents: 227705
+Total nq_examples: 7830
+Averaged: 29.08109833971903
+"""

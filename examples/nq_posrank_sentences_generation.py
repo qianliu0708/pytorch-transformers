@@ -440,6 +440,7 @@ def npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict):
                 ans["sentence"] = " ".join(doc_tokens[start_of_sentence:end_of_sentence])
                 ans["question"] = example.question_text
                 ans["example_id"] = eid
+                ans["label"] = "1"# unused label
                 ans["id"] = global_id
                 global_id+=1
                 nbest_pred_with_sent.append(ans)
