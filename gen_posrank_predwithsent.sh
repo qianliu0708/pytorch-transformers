@@ -13,3 +13,4 @@ python ./examples/nq_posrank_sentences_generation.py \
 echo Done ${i}
 } &
 done
+#finished
