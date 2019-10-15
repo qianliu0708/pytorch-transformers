@@ -49,7 +49,7 @@ def multiple_read(all_input_files):
     logger.info('Multiprocessing!')
     features_initial = []
     with Pool(Thread_num) as p:
-        annotate = partial(read_annotation_for_traingzip,input_files=input_files)
+        annotate = partial(read_annotation_for_traingzip)
 
         piece_num = int(len(all_input_files) / Thread_num)
         example_chunks = [all_input_files[start:start + piece_num] for start in range(0, len(all_input_files), piece_num)]
