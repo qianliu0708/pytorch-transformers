@@ -42,10 +42,11 @@ def read_annotation_for_traingzip(input_files):
 def multiple_read(all_input_files):
     print('Multiprocessing!')
     features_initial = []
+    size = int(len(all_input_files) / Thread_num)
     with Pool(Thread_num) as p:
         annotate = partial(read_annotation_for_traingzip)
         from tqdm import tqdm
-        examples = list(tqdm(p.imap(annotate, all_input_files,chunksize=int(len(all_input_files) / Thread_num)),
+        examples = list(tqdm(p.imap(annotate, all_input_files,chunksize=size),
                                      total=len(all_input_files),desc="reading gzips"))
     examples = [example for entry_examples in examples for example in entry_examples]
     return examples
