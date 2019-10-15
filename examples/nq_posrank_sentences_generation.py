@@ -601,5 +601,9 @@ if __name__ == '__main__':
     else:
         nbest_pred_with_sents_cls = npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict)
         pickle.dump(nbest_pred_with_sents_cls, open(args.output_cls_file, "wb"))
-
+        print("sents:",len(nbest_pred_with_sents_cls))
+        examples_id = []
+        for e in nbest_pred_with_sents_cls:
+            examples_id.append(e["example_id"])
+        print("examples:",len(list(set(examples_id))))
 
