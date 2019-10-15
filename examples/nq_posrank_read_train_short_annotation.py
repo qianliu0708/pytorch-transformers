@@ -50,17 +50,11 @@ def multiple_read(all_input_files):
     features_initial = []
     with Pool(Thread_num) as p:
         annotate = partial(read_annotation_for_traingzip)
-
-        piece_num = int(len(all_input_files) / Thread_num)
-        example_chunks = [all_input_files[start:start + piece_num] for start in range(0, len(all_input_files), piece_num)]
-        print('total chunks: {}'.format(len(example_chunks)))
-
-        for chunk_id, examples_part in enumerate(example_chunks):
-            from tqdm import tqdm
-            features_partial = list(tqdm(p.imap(annotate, examples_part),total=len(examples_part),desc="reading gzips"))
-            features_initial.extend(features_partial)
-            print('processing chunk {}'.format(chunk_id))
-    return features_initial
+        from tqdm import tqdm
+        examples = list(tqdm(p.imap(annotate, all_input_files,chunksize=int(len(all_input_files) / Thread_num)),
+                                     total=len(all_input_files),desc="reading gzips"))
+    examples = [example for entry_examples in examples for example in entry_examples]
+    return examples
 
 
 if __name__ == '__main__':
@@ -76,6 +70,8 @@ if __name__ == '__main__':
     print("Total gzips:", len(input_files))
 
     annoted_short_labels = multiple_read(input_files)#[[eid,starttok,endtok,True/False(has answer)]]
+
+
     pickle.dump(annoted_short_labels, open(args.output_file, "wb"))
     print("Dumpted annotations into {}".format(args.output_file))
     count_has_short =0
