@@ -14,18 +14,12 @@ from multiprocessing import Pool
 from functools import partial
 import logging
 logger = logging.getLogger(__name__)
-def _open(path):
-    if path.endswith(".gz"):
-        return gzip.open(path, "r")
-    else:
-        print("wrong file")
-        exit()
 
 def read_annotation_for_traingzip(input_files):
     train_annos_short = []
     print("Start:",input_files)
     for input_file in input_files:
-        with _open(input_file) as input_jsonl:
+        with gzip.open(input_file, "r") as input_jsonl:
             for line in input_jsonl:
                 e = json.loads(line, object_pairs_hook=collections.OrderedDict)
                 eid = e["example_id"]
