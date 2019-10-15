@@ -386,7 +386,6 @@ def convert_predwithsent_cls_format_train(all_pred_with_sent_data,example_labels
 
 
 def npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict):
-    all_nbest_pred_with_sents = {}
     count_all_sents = 0
     global_id = 10000000000
 
@@ -449,15 +448,14 @@ def npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict):
                 if ans["text"] not in ans["sentence"]:
                     print("answer: {}, sent: {}".format(ans["text"], ans["sentence"]))
 
-        all_nbest_pred_with_sents[eid] = nbest_pred_with_sent
         count_all_sents += len(set(sentlist))
 
-    logger.info("Num of examples: %s" % (str(len(all_nbest_pred_with_sents))))
+    logger.info("Num of examples: %s" % (str(len(nbest_pred_with_sent))))
     logger.info(
         "Averaged distinguished sentences of each example: %s" % (str(count_all_sents / len(all_nbest_predictions))))
-    pickle.dump(all_nbest_pred_with_sents, open(nbest_pred_with_sent_file, "wb"))
+    pickle.dump(nbest_pred_with_sent, open(nbest_pred_with_sent_file, "wb"))
     logger.info("Dumped all_nbest_with_sents to : %s" % (nbest_pred_with_sent_file))
-    return all_nbest_pred_with_sents
+    return nbest_pred_with_sent
 
 
 def npred_2_npredwithsent_Train(all_nbest_predictions,all_examples_dict):
@@ -565,16 +563,7 @@ if __name__ == '__main__':
     one_pred_json_file = args.output_pred_file#offical prediction file
     nbest_pred_with_sent_file = args.output_nbest_pred_with_sent_file#example:{30 answer candidates, and each answer is associated with its sentences}
 
-    #---------------------------------------GCRtest--------------------------------------------
-    # pk_dir = "/mnt/ans_ranker/pk200"#pkdev
-    # example_file = pk_dir+"/examples_.pk"
-    # feature_file = pk_dir+"/features_.pk"
-    # results_file = pk_dir+"/allresults_.pk"
-    #-------------------------------------output files-----------------------------------------
-    # nbest_pk_file = pk_dir+"/all_nbest_pred.pk"# exampleid:{30 answer candidates}
-    # one_pred_json_file = pk_dir+"/predictions.json"#offical prediction file
-    # nbest_pred_with_sent_file = pk_dir+"/all_nbest_with_sent.pk"#example:{30 answer candidates, and each answer is associated with its sentences}
-    #--------------------------------------GCRend----------------------------------------------
+    #-------------------------------------Load data-------------------------------------------
     all_examples = pickle.load(open(example_file, "rb"))
     all_features = pickle.load(open(feature_file, "rb"))
     all_results = pickle.load(open(results_file, "rb"))
@@ -582,7 +571,7 @@ if __name__ == '__main__':
     all_examples_dict = {}
     for e in all_examples:
         all_examples_dict[e.qas_id] = e
-    # #----------------------------------output files-------------------------------------------
+    # #----------------------------step1: generated candidate answers--------------------
     output_prediction_file = one_pred_json_file
     all_nq_prediction, all_nbest_predictions = write_nq_predictions(all_examples, all_features, all_results,
                                                                     n_best_size=30,
@@ -594,11 +583,14 @@ if __name__ == '__main__':
                                                                     nbest_pred_file=nbest_pk_file)
 
     if args.is_training:
+        #--------------------step2:gent the sentence for each answer---------------
         nbest_pred_with_sents = npred_2_npredwithsent_Train(all_nbest_predictions,all_examples_dict)
         example_labels = pickle.load(open(args.train_anno_file,"rb"))#add label
+        #-------------------step3: get the sentence label and convert to cls format--------
         train_examples_cls = convert_predwithsent_cls_format_train(nbest_pred_with_sents,example_labels)
         pickle.dump(train_examples_cls,open(args.output_cls_file,"wb"))
     else:
+        # -----------------step2:gent the sentence for each answer and convert to cls format---------------
         nbest_pred_with_sents_cls = npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict)
         pickle.dump(nbest_pred_with_sents_cls, open(args.output_cls_file, "wb"))
         print("sents:",len(nbest_pred_with_sents_cls))
