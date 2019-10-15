@@ -8,11 +8,11 @@ import re
 import glob
 from multiprocessing import cpu_count
 Thread_num = cpu_count()
+print("Thread_num",Thread_num)
 import multiprocessing
 from multiprocessing import Pool
 from functools import partial
 import logging
-
 logger = logging.getLogger(__name__)
 def _open(path):
     if path.endswith(".gz"):
@@ -58,7 +58,7 @@ def multiple_read(all_input_files):
 
         for chunk_id, examples_part in enumerate(example_chunks):
             from tqdm import tqdm
-            features_partial = list(tqdm(p.imap(annotate, examples_part)))
+            features_partial = list(tqdm(p.imap(annotate, examples_part),total=len(examples_part),desc="reading gzips"))
             features_initial.extend(features_partial)
             logger.info('processing chunk {}'.format(chunk_id))
     return features_initial
