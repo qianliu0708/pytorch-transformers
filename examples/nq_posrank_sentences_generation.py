@@ -568,7 +568,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.is_training:
         assert args.train_anno_file != None
-    if args.is_add_dev_label:
+    if args.is_adddevlabel:
         assert args.dev_anno_file != None
     #--------------------------------------input files-----------------------------------------
     example_file = args.example_pk_file
