@@ -277,6 +277,7 @@ def write_nq_predictions(all_examples, all_features, all_results, n_best_size,
             output["end_logit"] = entry.end_logit
             output["start_short_idx"] = entry.start_nq_idx#lq added
             output["end_short_idx"] = entry.end_nq_idx#lq added
+            output["score"] = entry.start_logit+entry.end_logit-score_null
 
             long_start = -1
             long_end = -1
@@ -453,7 +454,7 @@ def npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict):
 
     logger.info("Num of examples: %s" % (str(len(nbest_pred_with_sent))))
     logger.info(
-        "Averaged distinguished sentences of each example: %s" % (str(count_all_sents / len(all_nbest_predictions))))
+        "Averaged distinguished sentences of each example: %s" % (str(count_all_sents / len(nbest_pred_with_sent))))
     pickle.dump(nbest_pred_with_sent, open(nbest_pred_with_sent_file, "wb"))
     logger.info("Dumped all_nbest_with_sents to : %s" % (nbest_pred_with_sent_file))
     return nbest_pred_with_sent
