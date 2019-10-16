@@ -90,5 +90,5 @@ if __name__ == '__main__':
         else:
             annoted_short_labels_dict[e[0]] = [e[1:]]
     pickle.dump(annoted_short_labels_dict, open(args.output_file, "wb"))
-
+    print("total examples:",len(annoted_short_labels_dict))
     print("Dumpted annotations into {}".format(args.output_file))
