@@ -8,7 +8,9 @@ python ./examples/nq_posrank_sentences_generation.py \
 --output_nbest_pk_file /data/nieping/pytorch-transformers/data/nq_sentence_selector/dev_all/dev_nbest_pred_${i}.pk \
 --output_pred_file /data/nieping/pytorch-transformers/data/nq_sentence_selector/dev_all/dev_one_pred_${i}.json \
 --output_nbest_pred_with_sent_file /data/nieping/pytorch-transformers/data/nq_sentence_selector/dev_all/dev_nbest_predwithsent_${i}.pk \
---output_cls_file /data/nieping/pytorch-transformers/data/nq_sentence_selector/dev_all/dev_predwithsent_cls_${i}.pk
+--output_cls_file /data/nieping/pytorch-transformers/data/nq_sentence_selector/dev_all/dev_predwithsent_cls_${i}.pk \
+--is_adddevlabel \
+--dev_anno_file /data/nieping/pytorch-transformers/data/nq_sentence_selector/all_dev_short_labels.pk
 echo Done ${i}
 } &
 done
