@@ -386,10 +386,12 @@ def convert_predwithsent_cls_format_train(all_pred_with_sent_data,example_labels
 
 
 
-def npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict):
+def npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict,example_labels):
     count_all_sents = 0
     global_id = 10000000000
     nbest_pred_with_sent = []
+    count_has_answer = 0
+    count_no_answer = 0
     sentlist = []
     from tqdm import tqdm
     for (eid, nbest_pred) in tqdm(all_nbest_predictions.items()):
@@ -441,7 +443,14 @@ def npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict):
                 ans["sentence"] = " ".join(doc_tokens[start_of_sentence:end_of_sentence])
                 ans["question"] = example.question_text
                 ans["example_id"] = eid
-                ans["label"] = "1"# unused label
+                ans["label"] = "0"#no label
+                if args.is_adddevlabel:#add label
+                    if int(eid) in example_labels:
+                        for one_label in example_labels[int(eid)]:
+                            if one_label[-1] and one_label[0] >= start_of_sentence and one_label[1] <= end_of_sentence:
+                                ans["label"] = '1'
+                                count_has_answer += 1
+                                break
                 ans["id"] = global_id
                 global_id+=1
                 nbest_pred_with_sent.append(ans)
@@ -457,6 +466,7 @@ def npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict):
         "Averaged distinguished sentences of each example: %s" % (str(count_all_sents / len(nbest_pred_with_sent))))
     pickle.dump(nbest_pred_with_sent, open(nbest_pred_with_sent_file, "wb"))
     logger.info("Dumped all_nbest_with_sents to : %s" % (nbest_pred_with_sent_file))
+    logger.info("Labeled has answer: %d" % (count_has_answer))
     return nbest_pred_with_sent
 
 
@@ -552,10 +562,14 @@ if __name__ == '__main__':
 
     parser.add_argument("--train_anno_file", default=None, type=str)
     parser.add_argument("--is_training", action='store_true')
+    parser.add_argument("--is_adddevlabel", action='store_true')
+    parser.add_argument("--dev_anno_file", default=None, type=str)
     parser.add_argument("--output_cls_file", default=None, type=str, required=True)
     args = parser.parse_args()
     if args.is_training:
         assert args.train_anno_file != None
+    if args.is_add_dev_label:
+        assert args.dev_anno_file != None
     #--------------------------------------input files-----------------------------------------
     example_file = args.example_pk_file
     feature_file = args.feature_pk_file
@@ -593,12 +607,19 @@ if __name__ == '__main__':
         pickle.dump(train_examples_cls,open(args.output_cls_file,"wb"))
     else:
         # -----------------step2:gent the sentence for each answer and convert to cls format---------------
-        nbest_pred_with_sents_cls = npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict)
+        if args.is_adddevlabel:
+            example_labels = pickle.load(open(args.dev_anno_file, "rb"))
+        else:
+            example_labels=None
+        nbest_pred_with_sents_cls = npred_2_npredwithsent_Dev(all_nbest_predictions,all_examples_dict,example_labels)
         pickle.dump(nbest_pred_with_sents_cls, open(args.output_cls_file, "wb"))
         print("Dumped npredwitsent_cls format to ",args.output_cls_file)
+
+        #---------------add label---for research---------------------------------------------
+
         # print("sents:",len(nbest_pred_with_sents_cls))
         # examples_id = []
         # for e in nbest_pred_with_sents_cls:
         #     examples_id.append(e["example_id"])
         # print("examples:",len(list(set(examples_id))))
-        #
+
