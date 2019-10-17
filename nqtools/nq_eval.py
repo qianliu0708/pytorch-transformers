@@ -455,6 +455,9 @@ def main(_):
                                             short_answer_stats)
     print(json.dumps(metrics))
     print(json.dumps(metrics, indent=2))
+    with open("grad_results.txt", "a") as myfile:
+      myfile.write(FLAGS.predictions_path+"\t"+str(metrics["long-best-threshold-f1"])+"\t"+str(metrics["short-best-threshold-f1"])+"\n")
+
 
 
 if __name__ == '__main__':
