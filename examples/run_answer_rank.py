@@ -22,6 +22,7 @@ import logging
 import os
 import random
 import glob
+import pickle
 
 import numpy as np
 import torch
@@ -33,7 +34,7 @@ from tqdm import tqdm, trange
 from tensorboardX import SummaryWriter
 
 from transformers import (WEIGHTS_NAME, BertConfig,
-                                  BertForQuestionAnswering, BertTokenizer,
+                                  BertForQuestionAnswering,BertTokenizer,
                                   XLMConfig, XLMForQuestionAnswering,
                                   XLMTokenizer, XLNetConfig,
                                   XLNetForQuestionAnswering,
@@ -42,22 +43,23 @@ from transformers import (WEIGHTS_NAME, BertConfig,
 
 from transformers import AdamW, WarmupLinearSchedule
 
-from utils_squad import (read_squad_examples, convert_examples_to_features,
-                         RawResult, write_predictions,
-                         RawResultExtended, write_predictions_extended)
+from utils_squad import (read_squad_examples, convert_examples_to_features,convert_examples_to_features_multiple,
+                         RawResult, write_predictions,RawAnsResult,
+                         RawResultExtended, write_predictions_extended,write_ans_predictions)
 
 # The follwing import is the official SQuAD evaluation script (2.0).
 # You can remove it from the dependencies if you are using this script outside of the library
 # We've added it here for automated tests (see examples/test_examples.py file)
 from utils_squad_evaluate import EVAL_OPTS, main as evaluate_on_squad
 
+from my_ans_rank_model import BertForAnsRank
 logger = logging.getLogger(__name__)
 
 ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) \
                   for conf in (BertConfig, XLNetConfig, XLMConfig)), ())
 
 MODEL_CLASSES = {
-    'bert': (BertConfig, BertForQuestionAnswering, BertTokenizer),
+    'bert': (BertConfig, BertForAnsRank, BertTokenizer),#BertForQuestionAnswering
     'xlnet': (XLNetConfig, XLNetForQuestionAnswering, XLNetTokenizer),
     'xlm': (XLMConfig, XLMForQuestionAnswering, XLMTokenizer),
     'distilbert': (DistilBertConfig, DistilBertForQuestionAnswering, DistilBertTokenizer)
@@ -123,6 +125,12 @@ def train(args, train_dataset, model, tokenizer):
     logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
     logger.info("  Total optimization steps = %d", t_total)
 
+
+    '''
+    Train (all_input_ids, all_input_mask, all_segment_ids,
+            all_hard_label, all_soft_label,
+            5 all_cls_index, 6 all_p_mask,7 all_ans_span_mask)
+    '''
     global_step = 0
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
@@ -136,11 +144,12 @@ def train(args, train_dataset, model, tokenizer):
             inputs = {'input_ids':       batch[0],
                       'attention_mask':  batch[1], 
                       'token_type_ids':  None if args.model_type == 'xlm' else batch[2],  
-                      'start_positions': batch[3], 
-                      'end_positions':   batch[4]}
+                      'hard_label': batch[3], #
+                      'soft_label': batch[4],
+                      "ans_span":batch[7]}
             if args.model_type in ['xlnet', 'xlm']:
                 inputs.update({'cls_index': batch[5],
-                               'p_mask':       batch[6]})
+                               'p_mask':  batch[6]})
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
@@ -200,6 +209,14 @@ def train(args, train_dataset, model, tokenizer):
 def evaluate(args, model, tokenizer, prefix=""):
     dataset, examples, features = load_and_cache_examples(args, tokenizer, evaluate=True, output_examples=True)
 
+    # pickle.dump(dataset,open("data.pk","wb"))
+    # pickle.dump(examples,open("example.pk","wb"))
+    # pickle.dump(features,open("feature.pk","wb"))
+
+    # dataset = pickle.load(open("data.pk","rb"))
+    # examples = pickle.load(open("example.pk","rb"))
+    # features = pickle.load(open("feature.pk","rb"))
+
     if not os.path.exists(args.output_dir) and args.local_rank in [-1, 0]:
         os.makedirs(args.output_dir)
 
@@ -214,17 +231,23 @@ def evaluate(args, model, tokenizer, prefix=""):
     logger.info("  Batch size = %d", args.eval_batch_size)
     all_results = []
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
+        '''
+        TensorDataset(0 all_input_ids, 1 all_input_mask, 2 all_segment_ids,
+        3 all_example_index, 4 all_cls_index, 5 all_p_mask, 6 all_ans_span_mask, 7all_orig_pos_list)
+        '''
         model.eval()
         batch = tuple(t.to(args.device) for t in batch)
         with torch.no_grad():
             inputs = {'input_ids':      batch[0],
                       'attention_mask': batch[1],
-                      'token_type_ids': None if args.model_type == 'xlm' else batch[2]  # XLM don't use segment_ids
+                      'token_type_ids': None if args.model_type == 'xlm' else batch[2],  # XLM don't use segment_ids
+                      'ans_span':batch[6]
                       }
             example_indices = batch[3]
             if args.model_type in ['xlnet', 'xlm']:
                 inputs.update({'cls_index': batch[4],
                                'p_mask':    batch[5]})
+            orig_pos_list = batch[7]#added for eval
             outputs = model(**inputs)
 
         for i, example_index in enumerate(example_indices):
@@ -239,38 +262,17 @@ def evaluate(args, model, tokenizer, prefix=""):
                                            end_top_index        = to_list(outputs[3][i]),
                                            cls_logits           = to_list(outputs[4][i]))
             else:
-                result = RawResult(unique_id    = unique_id,
-                                   start_logits = to_list(outputs[0][i]),
-                                   end_logits   = to_list(outputs[1][i]))
+                result = RawAnsResult(
+                    unique_id    = unique_id,
+                    orig_position = orig_pos_list[i],
+                    score_logits = to_list(outputs[0][i]))
             all_results.append(result)
 
-    # Compute predictions
-    output_prediction_file = os.path.join(args.output_dir, "predictions_{}.json".format(prefix))
-    output_nbest_file = os.path.join(args.output_dir, "nbest_predictions_{}.json".format(prefix))
-    if args.version_2_with_negative:
-        output_null_log_odds_file = os.path.join(args.output_dir, "null_odds_{}.json".format(prefix))
-    else:
-        output_null_log_odds_file = None
+    # pickle.dump(all_results,open("result.pk","wb"))
+    # all_results = pickle.load(open("result.pk","rb"))
 
-    if args.model_type in ['xlnet', 'xlm']:
-        # XLNet uses a more complex post-processing procedure
-        write_predictions_extended(examples, features, all_results, args.n_best_size,
-                        args.max_answer_length, output_prediction_file,
-                        output_nbest_file, output_null_log_odds_file, args.predict_file,
-                        model.config.start_n_top, model.config.end_n_top,
-                        args.version_2_with_negative, tokenizer, args.verbose_logging)
-    else:
-        write_predictions(examples, features, all_results, args.n_best_size,
-                        args.max_answer_length, args.do_lower_case, output_prediction_file,
-                        output_nbest_file, output_null_log_odds_file, args.verbose_logging,
-                        args.version_2_with_negative, args.null_score_diff_threshold)
-
-    # Evaluate with the official SQuAD script
-    evaluate_options = EVAL_OPTS(data_file=args.predict_file,
-                                 pred_file=output_prediction_file,
-                                 na_prob_file=output_null_log_odds_file)
-    results = evaluate_on_squad(evaluate_options)
-    return results
+    all_dev_all_ans,all_dev_top1_ans = write_ans_predictions(examples, features, all_results)
+    return all_dev_all_ans,all_dev_top1_ans
 
 
 def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False):
@@ -289,14 +291,21 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
     else:
         logger.info("Creating features from dataset file at %s", input_file)
         examples = read_squad_examples(input_file=input_file,
-                                                is_training=not evaluate,
-                                                version_2_with_negative=args.version_2_with_negative)
-        features = convert_examples_to_features(examples=examples,
-                                                tokenizer=tokenizer,
-                                                max_seq_length=args.max_seq_length,
-                                                doc_stride=args.doc_stride,
-                                                max_query_length=args.max_query_length,
-                                                is_training=not evaluate)
+                                       is_training=not evaluate)
+        if evaluate:
+            features = convert_examples_to_features_multiple(examples=examples,
+                                                    tokenizer=tokenizer,
+                                                    max_seq_length=args.max_seq_length,
+                                                    doc_stride=args.doc_stride,
+                                                    max_query_length=args.max_query_length,
+                                                    is_training=not evaluate)
+        else:
+            features = convert_examples_to_features_multiple(examples=examples,
+                                                    tokenizer=tokenizer,
+                                                    max_seq_length=args.max_seq_length,
+                                                    doc_stride=args.doc_stride,
+                                                    max_query_length=args.max_query_length,
+                                                    is_training=not evaluate)
         if args.local_rank in [-1, 0]:
             logger.info("Saving features into cached file %s", cached_features_file)
             torch.save(features, cached_features_file)
@@ -310,16 +319,21 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
     all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
     all_cls_index = torch.tensor([f.cls_index for f in features], dtype=torch.long)
     all_p_mask = torch.tensor([f.p_mask for f in features], dtype=torch.float)
+
+    all_ans_span_mask = torch.tensor([f.ans_span_mask for f in features], dtype=torch.long)
     if evaluate:
         all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
+        all_orig_pos_list = torch.tensor([f.orig_pos_list for f in features], dtype=torch.long)
         dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids,
-                                all_example_index, all_cls_index, all_p_mask)
+                                all_example_index, all_cls_index, all_p_mask,all_ans_span_mask,all_orig_pos_list)
     else:
-        all_start_positions = torch.tensor([f.start_position for f in features], dtype=torch.long)
-        all_end_positions = torch.tensor([f.end_position for f in features], dtype=torch.long)
+        # all_start_positions = torch.tensor([f.start_position for f in features], dtype=torch.long)
+        # all_end_positions = torch.tensor([f.end_position for f in features], dtype=torch.long)
+        all_hard_label = torch.tensor([f.hard_label for f in features], dtype=torch.long)
+        all_soft_label = torch.tensor([f.soft_label for f in features], dtype=torch.float)
         dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids,
-                                all_start_positions, all_end_positions,
-                                all_cls_index, all_p_mask)
+                                all_hard_label, all_soft_label,
+                                all_cls_index, all_p_mask,all_ans_span_mask)
 
     if output_examples:
         return dataset, examples, features
@@ -331,9 +345,9 @@ def main():
 
     ## Required parameters
     parser.add_argument("--train_file", default="/data/qiali/nq_ranker/data/nq_pos_ans/nq_pos_ank_train.pk", type=str, required=False,
-                        help="pickle data generaged by nq_ranker/nq_pos_answer_generate_data.py")
-    parser.add_argument("--predict_file", default=None, type=str, required=False,
-                        help="SQuAD json for predictions. E.g., dev-v1.1.json or test-v1.1.json")
+                        help="pickle data generated by nq_ranker/nq_pos_answer_generate_data.py")
+    parser.add_argument("--predict_file", default="/data/qiali/nq_ranker/data/nq_pos_ans/nq_pos_ank_dev.pk", type=str, required=False,
+                        help="pickle file generated by nq_ranker/nq_pos_answer_generate_data.py")
     parser.add_argument("--model_type", default=None, type=str, required=True,
                         help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()))
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
@@ -521,14 +535,18 @@ def main():
             model.to(args.device)
 
             # Evaluate
-            result = evaluate(args, model, tokenizer, prefix=global_step)
+            all_dev_all_ans,all_dev_top1_ans = evaluate(args, model, tokenizer, prefix=global_step)
+            pickle.dump(all_dev_all_ans,open("/data/qiali/nq_ranker/data/nq_pos_ans/all_dev_all_ans.pk","wb"))
+            pickle.dump(all_dev_top1_ans,open("/data/qiali/nq_ranker/data/nq_pos_ans/all_dev_top_ans.pk","wb"))
+            print("Finished and saved to /data/qiali/nq_ranker/data/nq_pos_ans/all_dev_all_ans.pk")
+            print("Finished and saved to /data/qiali/nq_ranker/data/nq_pos_ans/all_dev_top_ans.pk")
 
-            result = dict((k + ('_{}'.format(global_step) if global_step else ''), v) for k, v in result.items())
-            results.update(result)
+            # result = dict((k + ('_{}'.format(global_step) if global_step else ''), v) for k, v in result.items())
+            # results.update(result)
 
-    logger.info("Results: {}".format(results))
+    # logger.info("Results: {}".format(results))
 
-    return results
+    return 0
 
 
 if __name__ == "__main__":

@@ -60,7 +60,7 @@ if is_torch_available():
     from .modeling_auto import (AutoModel, AutoModelForSequenceClassification, AutoModelForQuestionAnswering,
                                 AutoModelWithLMHead)
 
-    from .modeling_bert import (BertPreTrainedModel, BertModel, BertForPreTraining,
+    from .modeling_bert import (BertPreTrainedModel, BertModel, BertForPreTraining,BertForAnsRank,
                                 BertForMaskedLM, BertForNextSentencePrediction,
                                 BertForSequenceClassification, BertForMultipleChoice,
                                 BertForTokenClassification, BertForQuestionAnswering,

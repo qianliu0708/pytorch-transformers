@@ -17,7 +17,7 @@
 """ Load SQuAD dataset. """
 
 from __future__ import absolute_import, division, print_function
-
+from random import shuffle
 import json
 import logging
 import math
@@ -25,12 +25,98 @@ import collections
 from io import open
 
 from transformers.tokenization_bert import BasicTokenizer, whitespace_tokenize
-
+from multiprocessing import cpu_count
+Thread_num = cpu_count()
+import multiprocessing
+from multiprocessing import Pool
+from functools import partial
+from tqdm import tqdm
 # Required by XLNet evaluation method to compute optimal threshold (see write_predictions_extended() method)
 from utils_squad_evaluate import find_all_best_thresh_v2, make_qid_to_has_ans, get_raw_scores
+import pickle
 
 logger = logging.getLogger(__name__)
 
+# def Generate_Ans_Context(sent_start,sent_end,answer_span):
+#     start_pos = answer_span["start_position"]
+#     end_pos = answer_span["end_position"]
+#     context_start = 0
+#     context_end = 0
+#     for idx in range(len(start_pos)-1):
+#         if start_pos>= sent_start[idx] and start_pos<sent_start[idx+1]:
+#             context_start = sent_start[idx]
+#         if end_pos>sent_end[idx] and end_pos<=sent_end[idx+1]:
+#             context_end = sent_end[idx+1]
+#     assert context_end>context_start
+#     ans_idx_start = start_pos-context_start
+#     ans_idx_end = end_pos-context_start
+#     return (context_start,context_end),(ans_idx_start,ans_idx_end)
+
+class AnsRankInputFeatures(object):
+    """A single set of features of data."""
+
+    def __init__(self,
+                 unique_id,
+                 example_index,
+                 doc_span_index,
+                 tokens,
+                 token_to_orig_map,
+                 token_is_max_context,
+                 input_ids,
+                 input_mask,
+                 segment_ids,
+                 cls_index,
+                 p_mask,
+                 paragraph_len,
+                 ans_span_mask,
+                 orig_pos_list =None,
+                 hard_label = None,
+                 soft_label =None
+                 ):
+        self.unique_id = unique_id
+        self.example_index = example_index
+        self.doc_span_index = doc_span_index
+        self.tokens = tokens
+        self.token_to_orig_map = token_to_orig_map
+        self.token_is_max_context = token_is_max_context
+        self.input_ids = input_ids
+        self.input_mask = input_mask
+        self.segment_ids = segment_ids
+        self.cls_index = cls_index
+        self.p_mask = p_mask
+        self.paragraph_len = paragraph_len
+        self.ans_span_mask = ans_span_mask
+        self.orig_pos_list = orig_pos_list
+        self.hard_label = hard_label
+        self.soft_label = soft_label
+
+
+
+class AnsRankExample(object):
+    """
+    """
+
+    def __init__(self,
+                 qas_id,
+                 question_text,
+                 doc_tokens,
+                 answer_spans
+                 ):
+        self.qas_id = qas_id
+        self.question_text = question_text
+        self.doc_tokens = doc_tokens
+        self.answer_spans =answer_spans
+
+    def __str__(self):
+        return self.__repr__()
+
+    def __repr__(self):
+        s = ""
+        s += "qas_id: %s" % (self.qas_id)
+        s += ", question_text: %s" % (
+            self.question_text)
+        s += ", doc_tokens: [%s]" % (" ".join(self.doc_tokens))
+        return s
 
 class SquadExample(object):
     """
@@ -108,10 +194,11 @@ class InputFeatures(object):
         self.is_impossible = is_impossible
 
 
-def read_squad_examples(input_file, is_training, version_2_with_negative):
+def read_squad_examples(input_file, is_training):
     """Read a SQuAD json file into a list of SquadExample."""
-    with open(input_file, "r", encoding='utf-8') as reader:
-        input_data = json.load(reader)["data"]
+    # with open(input_file, "r", encoding='utf-8') as reader:
+    #     input_data = json.load(reader)["data"]
+    input_data = pickle.load(open(input_file,'rb'))
 
     def is_whitespace(c):
         if c == " " or c == "\t" or c == "\r" or c == "\n" or ord(c) == 0x202F:
@@ -119,70 +206,81 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
         return False
 
     examples = []
-    for entry in input_data:
-        for paragraph in entry["paragraphs"]:
-            paragraph_text = paragraph["context"]
-            doc_tokens = []
-            char_to_word_offset = []
-            prev_is_whitespace = True
-            for c in paragraph_text:
-                if is_whitespace(c):
-                    prev_is_whitespace = True
+
+    from tqdm import tqdm
+    for entry in tqdm(input_data):
+
+        question_text = entry["question"]
+        paragraph_text = entry["context"]
+        doc_tokens = []
+        char_to_word_offset = []
+        prev_is_whitespace = True
+        for c in paragraph_text:
+            if is_whitespace(c):
+                prev_is_whitespace = True
+            else:
+                if prev_is_whitespace:
+                    doc_tokens.append(c)
                 else:
-                    if prev_is_whitespace:
-                        doc_tokens.append(c)
-                    else:
-                        doc_tokens[-1] += c
-                    prev_is_whitespace = False
-                char_to_word_offset.append(len(doc_tokens) - 1)
+                    doc_tokens[-1] += c
+                prev_is_whitespace = False
+            char_to_word_offset.append(len(doc_tokens) - 1)
 
-            for qa in paragraph["qas"]:
-                qas_id = qa["id"]
-                question_text = qa["question"]
-                start_position = None
-                end_position = None
-                orig_answer_text = None
-                is_impossible = False
-                if is_training:
-                    if version_2_with_negative:
-                        is_impossible = qa["is_impossible"]
-                    if (len(qa["answers"]) != 1) and (not is_impossible):
-                        raise ValueError(
-                            "For training, each question should have exactly 1 answer.")
-                    if not is_impossible:
-                        answer = qa["answers"][0]
-                        orig_answer_text = answer["text"]
-                        answer_offset = answer["answer_start"]
-                        answer_length = len(orig_answer_text)
-                        start_position = char_to_word_offset[answer_offset]
-                        end_position = char_to_word_offset[answer_offset + answer_length - 1]
-                        # Only add answers where the text can be exactly recovered from the
-                        # document. If this CAN'T happen it's likely due to weird Unicode
-                        # stuff so we will just skip the example.
-                        #
-                        # Note that this means for training mode, every example is NOT
-                        # guaranteed to be preserved.
-                        actual_text = " ".join(doc_tokens[start_position:(end_position + 1)])
-                        cleaned_answer_text = " ".join(
-                            whitespace_tokenize(orig_answer_text))
-                        if actual_text.find(cleaned_answer_text) == -1:
-                            logger.warning("Could not find answer: '%s' vs. '%s'",
-                                           actual_text, cleaned_answer_text)
-                            continue
-                    else:
-                        start_position = -1
-                        end_position = -1
-                        orig_answer_text = ""
+        candidate_answers = []
+        for answer in entry["answer_list"]:
+            orig_answer_text = answer["text"]
+            answer_offset = answer["answer_start"]
+            answer_length = len(orig_answer_text)
+            start_position = char_to_word_offset[answer_offset]
+            end_position = char_to_word_offset[answer_offset + answer_length - 1]
 
-                example = SquadExample(
-                    qas_id=qas_id,
-                    question_text=question_text,
-                    doc_tokens=doc_tokens,
-                    orig_answer_text=orig_answer_text,
-                    start_position=start_position,
-                    end_position=end_position,
-                    is_impossible=is_impossible)
-                examples.append(example)
+            actual_text = " ".join(doc_tokens[start_position:(end_position + 1)])
+            cleaned_answer_text = " ".join(
+                whitespace_tokenize(orig_answer_text))
+            if actual_text.find(cleaned_answer_text) == -1:
+                logger.warning("Could not find answer: '%s' vs. '%s'",
+                               actual_text, cleaned_answer_text)
+                continue
+            if is_training:
+                hard_label = answer["hard_lbl"]
+                soft_label = answer["soft_lbl"]
+            else:
+                hard_label = None
+                soft_label = None
+            candidate_answers.append({
+                "orig_answer_text":orig_answer_text,
+                "start_position":start_position,
+                "end_position":end_position,
+                "hard_label":hard_label,
+                "soft_label":soft_label})
+
+        # #-------------------remove unused doc_tokens--------------------------------------------------------------------
+        # # ------------------------sent split----------------------------------------------------------------------------
+        # sent_end = []
+        # for idx, (tok) in enumerate(doc_tokens):
+        #     if tok in [".", "?", "!"]:
+        #         sent_end.append(idx)
+        # if len(doc_tokens) - 1 not in sent_end:
+        #     sent_end.append(len(doc_tokens) - 1)
+        # sent_start = [0] + sent_end
+        # sent_span_list = list(zip(sent_start, sent_end))
+        # # -------------------------analysis ans spans-------------------------------------------------------------------
+        # min_start = len(doc_tokens)
+        # max_end = 0
+        # for ans_span in candidate_answers:
+        #     min_start = min(min_start,ans_span["start_position"])
+        #     max_end = max(max_end,ans_span["end_position"])
+        # if max_end-min_start >=2000:
+        #     print("!")
+
+        #---------------------------------------------------------------------------------------------------------------
+        example = AnsRankExample(
+            qas_id=entry['id'],
+            question_text=question_text,
+            doc_tokens=doc_tokens,
+            answer_spans=candidate_answers
+        )
+        examples.append(example)
     return examples
 
 
@@ -196,17 +294,19 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
     """Loads a data file into a list of `InputBatch`s."""
 
     unique_id = 1000000000
+
     # cnt_pos, cnt_neg = 0, 0
     # max_N, max_M = 1024, 1024
     # f = np.zeros((max_N, max_M), dtype=np.float32)
 
     features = []
-    for (example_index, example) in enumerate(examples):
+    for (example_index, example) in enumerate(tqdm(examples)):
 
         # if example_index % 100 == 0:
         #     logger.info('Converting %s/%s pos %s neg %s', example_index, len(examples), cnt_pos, cnt_neg)
 
         query_tokens = tokenizer.tokenize(example.question_text)
+
 
         if len(query_tokens) > max_query_length:
             query_tokens = query_tokens[0:max_query_length]
@@ -221,20 +321,22 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                 tok_to_orig_index.append(i)
                 all_doc_tokens.append(sub_token)
 
-        tok_start_position = None
-        tok_end_position = None
-        if is_training and example.is_impossible:
-            tok_start_position = -1
-            tok_end_position = -1
-        if is_training and not example.is_impossible:
-            tok_start_position = orig_to_tok_index[example.start_position]
-            if example.end_position < len(example.doc_tokens) - 1:
-                tok_end_position = orig_to_tok_index[example.end_position + 1] - 1
+        answers_with_tok_positions = []#sub tok level start end
+        answers_with_tok_positions_orig_idx = []
+        for temp_idx,(answer) in enumerate(example.answer_spans):
+
+            tok_start_position = orig_to_tok_index[answer["start_position"]]
+            if answer["end_position"]< len(example.doc_tokens) - 1:
+                tok_end_position = orig_to_tok_index[answer["end_position"] + 1] - 1
             else:
                 tok_end_position = len(all_doc_tokens) - 1
             (tok_start_position, tok_end_position) = _improve_answer_span(
                 all_doc_tokens, tok_start_position, tok_end_position, tokenizer,
-                example.orig_answer_text)
+                answer["orig_answer_text"])
+            answer["tok_start_position"] = tok_start_position
+            answer["tok_end_position"] = tok_end_position
+            answers_with_tok_positions.append(answer)
+            answers_with_tok_positions_orig_idx.append(temp_idx)
 
         # The -3 accounts for [CLS], [SEP] and [SEP]
         max_tokens_for_doc = max_seq_length - len(query_tokens) - 3
@@ -256,6 +358,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             start_offset += min(length, doc_stride)
 
         for (doc_span_index, doc_span) in enumerate(doc_spans):
+
             tokens = []
             token_to_orig_map = {}
             token_is_max_context = {}
@@ -325,58 +428,95 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             assert len(input_mask) == max_seq_length
             assert len(segment_ids) == max_seq_length
 
-            span_is_impossible = example.is_impossible
-            start_position = None
-            end_position = None
-            if is_training and not span_is_impossible:
-                # For training, if our document chunk does not contain an annotation
-                # we throw it out, since there is nothing to predict.
-                doc_start = doc_span.start
-                doc_end = doc_span.start + doc_span.length - 1
-                out_of_span = False
-                if not (tok_start_position >= doc_start and
+            doc_start = doc_span.start
+            doc_end = doc_span.start + doc_span.length - 1
+            doc_offset = len(query_tokens) + 2
+
+            with_answer_in_doc = False
+            answer_within_doc = []#
+            answer_within_doc_orig_position = []#the orig pos
+
+            for (answer,answer_orig_idx) in zip(answers_with_tok_positions,answers_with_tok_positions_orig_idx):
+                tok_start_position = answer["tok_start_position"]
+                tok_end_position = answer["tok_end_position"]
+                if (tok_start_position >= doc_start and
                         tok_end_position <= doc_end):
-                    out_of_span = True
-                if out_of_span:
-                    start_position = 0
-                    end_position = 0
-                    span_is_impossible = True
+                    answer_within_doc.append(answer)
+                    answer_within_doc_orig_position.append(answer_orig_idx)
+                    if is_training:
+                        if answer["hard_label"] == 1:# if all contained answer is wrong answer span
+                            with_answer_in_doc = True
+                    else:
+                        with_answer_in_doc = True
+            if not with_answer_in_doc:
+                continue
+            else:
+                if len(answer_within_doc)>=16:
+                    answer_within_doc = answer_within_doc[0:16]
+                    answer_within_doc_orig_position = answer_within_doc_orig_position[0:16]
                 else:
-                    doc_offset = len(query_tokens) + 2
-                    start_position = tok_start_position - doc_start + doc_offset
-                    end_position = tok_end_position - doc_start + doc_offset
+                    pad_non_answer = {
+                        "tok_start_position":0,
+                        "tok_end_position":0,
+                        "hard_label":0,
+                        "soft_label":0
+                    }
+                    answer_within_doc = answer_within_doc+[pad_non_answer]*(16-len(answer_within_doc))
+                    answer_within_doc_orig_position = answer_within_doc_orig_position+[-1]*(16-len(answer_within_doc_orig_position))
+                assert len(answer_within_doc) == 16
+                assert len(answer_within_doc_orig_position) == 16
 
-            if is_training and span_is_impossible:
-                start_position = cls_index
-                end_position = cls_index
+                ans_span_mask=[]
+                hard_labels = []
+                soft_labels = []
+                orig_pos_list = []
+                idx_list = [i for i in range(16)]
+                if is_training:
+                    #training
+                    shuffle(idx_list)#!!! training can shuffle
+                    for ans_idx in idx_list:
+                        orig_pos_list.append(answer_within_doc_orig_position[ans_idx])
+                        answer = answer_within_doc[ans_idx]
+                        ans_mask = [0]*max_seq_length
+                        tok_start_position = answer["tok_start_position"]
+                        tok_end_position = answer["tok_end_position"]
 
-            if example_index < 20:
-                logger.info("*** Example ***")
-                logger.info("unique_id: %s" % (unique_id))
-                logger.info("example_index: %s" % (example_index))
-                logger.info("doc_span_index: %s" % (doc_span_index))
-                logger.info("tokens: %s" % " ".join(tokens))
-                logger.info("token_to_orig_map: %s" % " ".join([
-                    "%d:%d" % (x, y) for (x, y) in token_to_orig_map.items()]))
-                logger.info("token_is_max_context: %s" % " ".join([
-                    "%d:%s" % (x, y) for (x, y) in token_is_max_context.items()
-                ]))
-                logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
-                logger.info(
-                    "input_mask: %s" % " ".join([str(x) for x in input_mask]))
-                logger.info(
-                    "segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
-                if is_training and span_is_impossible:
-                    logger.info("impossible example")
-                if is_training and not span_is_impossible:
-                    answer_text = " ".join(tokens[start_position:(end_position + 1)])
-                    logger.info("start_position: %d" % (start_position))
-                    logger.info("end_position: %d" % (end_position))
-                    logger.info(
-                        "answer: %s" % (answer_text))
+                        if tok_end_position==0:
+                            start_position = 0
+                            end_position = 0
+                        else:
+                            start_position = tok_start_position - doc_start + doc_offset
+                            end_position = tok_end_position - doc_start + doc_offset
+
+                        for idx in range(start_position,end_position+1):
+                            ans_mask[idx] =1
+                        ans_span_mask.append(ans_mask)
+                        hard_labels.append(answer["hard_label"])
+                        soft_labels.append(answer["soft_label"])
+                else:
+                    #dev
+                    for ans_idx in idx_list:
+                        orig_pos_list.append(answer_within_doc_orig_position[ans_idx])
+                        answer = answer_within_doc[ans_idx]
+                        ans_mask = [0] * max_seq_length
+                        tok_start_position = answer["tok_start_position"]
+                        tok_end_position = answer["tok_end_position"]
+
+                        if tok_end_position == 0:
+                            start_position = 0
+                            end_position = 0
+                        else:
+                            start_position = tok_start_position - doc_start + doc_offset
+                            end_position = tok_end_position - doc_start + doc_offset
+
+                        for idx in range(start_position, end_position + 1):
+                            ans_mask[idx] = 1
+                        ans_span_mask.append(ans_mask)
+
+
 
             features.append(
-                InputFeatures(
+                AnsRankInputFeatures(
                     unique_id=unique_id,
                     example_index=example_index,
                     doc_span_index=doc_span_index,
@@ -389,13 +529,363 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                     cls_index=cls_index,
                     p_mask=p_mask,
                     paragraph_len=paragraph_len,
-                    start_position=start_position,
-                    end_position=end_position,
-                    is_impossible=span_is_impossible))
+                    ans_span_mask=ans_span_mask,
+                    orig_pos_list=orig_pos_list,
+                    hard_label=hard_labels,
+                    soft_label=soft_labels
+                ))
             unique_id += 1
+
+            # if example_index < 20:
+            #     logger.info("*** Example ***")
+            #     logger.info("unique_id: %s" % (unique_id))
+            #     logger.info("example_index: %s" % (example_index))
+            #     logger.info("doc_span_index: %s" % (doc_span_index))
+            #     logger.info("tokens: %s" % " ".join(tokens))
+            #     logger.info("token_to_orig_map: %s" % " ".join([
+            #         "%d:%d" % (x, y) for (x, y) in token_to_orig_map.items()]))
+            #     logger.info("token_is_max_context: %s" % " ".join([
+            #         "%d:%s" % (x, y) for (x, y) in token_is_max_context.items()
+            #     ]))
+            #     logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+            #     logger.info(
+            #         "input_mask: %s" % " ".join([str(x) for x in input_mask]))
+            #     logger.info(
+            #         "segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+            #     if is_training and span_is_impossible:
+            #         logger.info("impossible example")
+            #     if is_training and not span_is_impossible:
+            #         answer_text = " ".join(tokens[start_position:(end_position + 1)])
+            #         logger.info("start_position: %d" % (start_position))
+            #         logger.info("end_position: %d" % (end_position))
+            #         logger.info(
+            #             "answer: %s" % (answer_text))
+            #
 
     return features
 
+def sub_examples_to_features(examples, tokenizer, max_seq_length,
+                                 doc_stride, max_query_length, is_training,
+                                 cls_token_at_end=False,
+                                 cls_token='[CLS]', sep_token='[SEP]', pad_token=0,
+                                 sequence_a_segment_id=0, sequence_b_segment_id=1,
+                                 cls_token_segment_id=0, pad_token_segment_id=0,
+                                 mask_padding_with_zero=True):
+    """Loads a data file into a list of `InputBatch`s."""
+
+    unique_id = 1000000000
+
+    # cnt_pos, cnt_neg = 0, 0
+    # max_N, max_M = 1024, 1024
+    # f = np.zeros((max_N, max_M), dtype=np.float32)
+    examples = [examples]
+    features = []
+    for (example_index, example) in enumerate(examples):
+
+        # if example_index % 100 == 0:
+        #     logger.info('Converting %s/%s pos %s neg %s', example_index, len(examples), cnt_pos, cnt_neg)
+
+        query_tokens = tokenizer.tokenize(example.question_text)
+
+
+        if len(query_tokens) > max_query_length:
+            query_tokens = query_tokens[0:max_query_length]
+
+        tok_to_orig_index = []
+        orig_to_tok_index = []
+        all_doc_tokens = []
+        for (i, token) in enumerate(example.doc_tokens):
+            orig_to_tok_index.append(len(all_doc_tokens))
+            sub_tokens = tokenizer.tokenize(token)
+            for sub_token in sub_tokens:
+                tok_to_orig_index.append(i)
+                all_doc_tokens.append(sub_token)
+
+        answers_with_tok_positions = []#sub tok level start end
+        answers_with_tok_positions_orig_idx = []
+        for temp_idx,(answer) in enumerate(example.answer_spans):
+
+            tok_start_position = orig_to_tok_index[answer["start_position"]]
+            if answer["end_position"]< len(example.doc_tokens) - 1:
+                tok_end_position = orig_to_tok_index[answer["end_position"] + 1] - 1
+            else:
+                tok_end_position = len(all_doc_tokens) - 1
+            (tok_start_position, tok_end_position) = _improve_answer_span(
+                all_doc_tokens, tok_start_position, tok_end_position, tokenizer,
+                answer["orig_answer_text"])
+            answer["tok_start_position"] = tok_start_position
+            answer["tok_end_position"] = tok_end_position
+            answers_with_tok_positions.append(answer)
+            answers_with_tok_positions_orig_idx.append(temp_idx)
+
+        # The -3 accounts for [CLS], [SEP] and [SEP]
+        max_tokens_for_doc = max_seq_length - len(query_tokens) - 3
+
+        # We can have documents that are longer than the maximum sequence length.
+        # To deal with this we do a sliding window approach, where we take chunks
+        # of the up to our max length with a stride of `doc_stride`.
+        _DocSpan = collections.namedtuple(  # pylint: disable=invalid-name
+            "DocSpan", ["start", "length"])
+        doc_spans = []
+        start_offset = 0
+        while start_offset < len(all_doc_tokens):
+            length = len(all_doc_tokens) - start_offset
+            if length > max_tokens_for_doc:
+                length = max_tokens_for_doc
+            doc_spans.append(_DocSpan(start=start_offset, length=length))
+            if start_offset + length == len(all_doc_tokens):
+                break
+            start_offset += min(length, doc_stride)
+
+        for (doc_span_index, doc_span) in enumerate(doc_spans):
+
+            tokens = []
+            token_to_orig_map = {}
+            token_is_max_context = {}
+            segment_ids = []
+
+            # p_mask: mask with 1 for token than cannot be in the answer (0 for token which can be in an answer)
+            # Original TF implem also keep the classification token (set to 0) (not sure why...)
+            p_mask = []
+
+            # CLS token at the beginning
+            if not cls_token_at_end:
+                tokens.append(cls_token)
+                segment_ids.append(cls_token_segment_id)
+                p_mask.append(0)
+                cls_index = 0
+
+            # Query
+            for token in query_tokens:
+                tokens.append(token)
+                segment_ids.append(sequence_a_segment_id)
+                p_mask.append(1)
+
+            # SEP token
+            tokens.append(sep_token)
+            segment_ids.append(sequence_a_segment_id)
+            p_mask.append(1)
+
+            # Paragraph
+            for i in range(doc_span.length):
+                split_token_index = doc_span.start + i
+                token_to_orig_map[len(tokens)] = tok_to_orig_index[split_token_index]
+
+                is_max_context = _check_is_max_context(doc_spans, doc_span_index,
+                                                       split_token_index)
+                token_is_max_context[len(tokens)] = is_max_context
+                tokens.append(all_doc_tokens[split_token_index])
+                segment_ids.append(sequence_b_segment_id)
+                p_mask.append(0)
+            paragraph_len = doc_span.length
+
+            # SEP token
+            tokens.append(sep_token)
+            segment_ids.append(sequence_b_segment_id)
+            p_mask.append(1)
+
+            # CLS token at the end
+            if cls_token_at_end:
+                tokens.append(cls_token)
+                segment_ids.append(cls_token_segment_id)
+                p_mask.append(0)
+                cls_index = len(tokens) - 1  # Index of classification token
+
+            input_ids = tokenizer.convert_tokens_to_ids(tokens)
+
+            # The mask has 1 for real tokens and 0 for padding tokens. Only real
+            # tokens are attended to.
+            input_mask = [1 if mask_padding_with_zero else 0] * len(input_ids)
+
+            # Zero-pad up to the sequence length.
+            while len(input_ids) < max_seq_length:
+                input_ids.append(pad_token)
+                input_mask.append(0 if mask_padding_with_zero else 1)
+                segment_ids.append(pad_token_segment_id)
+                p_mask.append(1)
+
+            assert len(input_ids) == max_seq_length
+            assert len(input_mask) == max_seq_length
+            assert len(segment_ids) == max_seq_length
+
+            doc_start = doc_span.start
+            doc_end = doc_span.start + doc_span.length - 1
+            doc_offset = len(query_tokens) + 2
+
+            with_answer_in_doc = False
+            answer_within_doc = []#
+            answer_within_doc_orig_position = []#the orig pos
+
+            for (answer,answer_orig_idx) in zip(answers_with_tok_positions,answers_with_tok_positions_orig_idx):
+                tok_start_position = answer["tok_start_position"]
+                tok_end_position = answer["tok_end_position"]
+                if (tok_start_position >= doc_start and
+                        tok_end_position <= doc_end):
+                    answer_within_doc.append(answer)
+                    answer_within_doc_orig_position.append(answer_orig_idx)
+                    if is_training:
+                        if answer["hard_label"] == 1:# if all contained answer is wrong answer span
+                            with_answer_in_doc = True
+                    else:
+                        with_answer_in_doc = True
+            if not with_answer_in_doc:
+                continue
+            else:
+                if len(answer_within_doc)>=16:
+                    answer_within_doc = answer_within_doc[0:16]
+                    answer_within_doc_orig_position = answer_within_doc_orig_position[0:16]
+                else:
+                    pad_non_answer = {
+                        "tok_start_position":0,
+                        "tok_end_position":0,
+                        "hard_label":0,
+                        "soft_label":0
+                    }
+                    answer_within_doc = answer_within_doc+[pad_non_answer]*(16-len(answer_within_doc))
+                    answer_within_doc_orig_position = answer_within_doc_orig_position+[-1]*(16-len(answer_within_doc_orig_position))
+                assert len(answer_within_doc) == 16
+                assert len(answer_within_doc_orig_position) == 16
+
+                ans_span_mask=[]
+                hard_labels = []
+                soft_labels = []
+                orig_pos_list = []
+                idx_list = [i for i in range(16)]
+                if is_training:
+                    #training
+                    shuffle(idx_list)#!!! training can shuffle
+                    for ans_idx in idx_list:
+                        orig_pos_list.append(answer_within_doc_orig_position[ans_idx])
+                        answer = answer_within_doc[ans_idx]
+                        ans_mask = [0]*max_seq_length
+                        tok_start_position = answer["tok_start_position"]
+                        tok_end_position = answer["tok_end_position"]
+
+                        if tok_end_position==0:
+                            start_position = 0
+                            end_position = 0
+                        else:
+                            start_position = tok_start_position - doc_start + doc_offset
+                            end_position = tok_end_position - doc_start + doc_offset
+
+                        for idx in range(start_position,end_position+1):
+                            ans_mask[idx] =1
+                        ans_span_mask.append(ans_mask)
+                        hard_labels.append(answer["hard_label"])
+                        soft_labels.append(answer["soft_label"])
+                else:
+                    #dev
+                    for ans_idx in idx_list:
+                        orig_pos_list.append(answer_within_doc_orig_position[ans_idx])
+                        answer = answer_within_doc[ans_idx]
+                        ans_mask = [0] * max_seq_length
+                        tok_start_position = answer["tok_start_position"]
+                        tok_end_position = answer["tok_end_position"]
+
+                        if tok_end_position == 0:
+                            start_position = 0
+                            end_position = 0
+                        else:
+                            start_position = tok_start_position - doc_start + doc_offset
+                            end_position = tok_end_position - doc_start + doc_offset
+
+                        for idx in range(start_position, end_position + 1):
+                            ans_mask[idx] = 1
+                        ans_span_mask.append(ans_mask)
+
+
+
+            features.append(
+                AnsRankInputFeatures(
+                    unique_id=unique_id,
+                    example_index=example_index,
+                    doc_span_index=doc_span_index,
+                    tokens=tokens,
+                    token_to_orig_map=token_to_orig_map,
+                    token_is_max_context=token_is_max_context,
+                    input_ids=input_ids,
+                    input_mask=input_mask,
+                    segment_ids=segment_ids,
+                    cls_index=cls_index,
+                    p_mask=p_mask,
+                    paragraph_len=paragraph_len,
+                    ans_span_mask=ans_span_mask,
+                    orig_pos_list=orig_pos_list,
+                    hard_label=hard_labels,
+                    soft_label=soft_labels
+                ))
+            unique_id += 1
+
+            # if example_index < 20:
+            #     logger.info("*** Example ***")
+            #     logger.info("unique_id: %s" % (unique_id))
+            #     logger.info("example_index: %s" % (example_index))
+            #     logger.info("doc_span_index: %s" % (doc_span_index))
+            #     logger.info("tokens: %s" % " ".join(tokens))
+            #     logger.info("token_to_orig_map: %s" % " ".join([
+            #         "%d:%d" % (x, y) for (x, y) in token_to_orig_map.items()]))
+            #     logger.info("token_is_max_context: %s" % " ".join([
+            #         "%d:%s" % (x, y) for (x, y) in token_is_max_context.items()
+            #     ]))
+            #     logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+            #     logger.info(
+            #         "input_mask: %s" % " ".join([str(x) for x in input_mask]))
+            #     logger.info(
+            #         "segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+            #     if is_training and span_is_impossible:
+            #         logger.info("impossible example")
+            #     if is_training and not span_is_impossible:
+            #         answer_text = " ".join(tokens[start_position:(end_position + 1)])
+            #         logger.info("start_position: %d" % (start_position))
+            #         logger.info("end_position: %d" % (end_position))
+            #         logger.info(
+            #             "answer: %s" % (answer_text))
+            #
+
+    return features
+
+def convert_examples_to_features_multiple(examples, tokenizer, max_seq_length,
+                                 doc_stride, max_query_length, is_training,
+                                 cls_token_at_end=False,
+                                 cls_token='[CLS]', sep_token='[SEP]', pad_token=0,
+                                 sequence_a_segment_id=0, sequence_b_segment_id=1,
+                                 cls_token_segment_id=0, pad_token_segment_id=0,
+                                 mask_padding_with_zero=True):
+    """Loads a data file into a list of `InputBatch`s."""
+    logger.info('Multiprocessing!')
+    unique_id = 1000000000
+
+    features_initial = []
+    with Pool(Thread_num) as p:
+        annotate = partial(sub_examples_to_features, tokenizer=tokenizer, max_seq_length=max_seq_length,
+                           doc_stride=doc_stride, max_query_length=max_query_length, is_training=is_training,
+                           cls_token_at_end=False,
+                           cls_token='[CLS]', sep_token='[SEP]', pad_token=0,
+                           sequence_a_segment_id=0, sequence_b_segment_id=1,
+                           cls_token_segment_id=0, pad_token_segment_id=0,
+                           mask_padding_with_zero=True)
+
+        example_chunks = [examples[start:start + 30000] for start in range(0, len(examples),30000)]
+        logger.info('total chunks: {}'.format(len(example_chunks)))
+        for chunk_id, examples_part in enumerate(example_chunks):
+            features_partial = list(tqdm(p.imap(annotate, examples_part, chunksize=64), total=len(examples_part),
+                                         desc='is_training_' + str(is_training).lower() + '_convert_features'))
+            features_initial.extend(features_partial)
+            logger.info('processing chunk {}'.format(chunk_id))
+    features = []
+    drop_negative_num = 0
+    for example_index, example_features in tqdm(enumerate(features_initial), desc='post processing fetures'):
+        if not example_features:
+            logger.info('Attention: meet wrong example!')
+        for feature in example_features:
+            feature.unique_id = unique_id
+            unique_id += 1
+            feature.example_index = example_index
+            features.append(feature)
+    logger.info('Is training: {} features num: {}, drop negative num: {}'.format(str(is_training), len(features),
+                                                                                 drop_negative_num))
+
+    return features
 
 def _improve_answer_span(doc_tokens, input_start, input_end, tokenizer,
                          orig_answer_text):
@@ -473,7 +963,8 @@ def _check_is_max_context(doc_spans, cur_span_index, position):
 
 RawResult = collections.namedtuple("RawResult",
                                    ["unique_id", "start_logits", "end_logits"])
-
+RawAnsResult = collections.namedtuple("RawAnsResult",
+                                   ["unique_id", "orig_position","score_logits"])
 def write_predictions(all_examples, all_features, all_results, n_best_size,
                       max_answer_length, do_lower_case, output_prediction_file,
                       output_nbest_file, output_null_log_odds_file, verbose_logging,
@@ -994,3 +1485,45 @@ def _compute_softmax(scores):
     for score in exp_scores:
         probs.append(score / total_sum)
     return probs
+
+
+def write_ans_predictions(all_examples, all_features, all_results):
+
+    example_index_to_features = collections.defaultdict(list)
+    for feature in all_features:
+        example_index_to_features[feature.example_index].append(feature)
+
+    unique_id_to_result = {}
+    for result in all_results:
+        unique_id_to_result[result.unique_id] = result
+
+    _PrelimPrediction = collections.namedtuple(  # pylint: disable=invalid-name
+        "PrelimPrediction",
+        ["feature_index", "start_index", "end_index", "start_logit", "end_logit"])
+
+    all_dev_all_ans = {}
+    all_dev_top1_ans = {}
+    for (example_index, example) in enumerate(all_examples):
+        features = example_index_to_features[example_index]
+        example_id = example.qas_id
+        all_scores = {}
+        for (feature_index, feature) in enumerate(features):
+            result = unique_id_to_result[feature.unique_id]
+            orig_pos_list = result.orig_position.tolist()
+            score_logits = result.score_logits
+            for idx,(orig_pos,score) in enumerate(list(zip(orig_pos_list,score_logits))):
+                if orig_pos != -1:
+                    if orig_pos in all_scores:
+                        if score > all_scores[orig_pos]:
+                            all_scores[orig_pos] = score
+                    else:
+                        all_scores[orig_pos] = score
+        all_dev_all_ans[example_id] = (all_scores,example.answer_spans,example.doc_tokens)
+        max_score = -100000
+        max_pos = -1
+        for (pos_idx,score) in all_scores.items():
+            if score>max_score:
+                max_pos = pos_idx
+                max_score=score
+        all_dev_top1_ans[example_id] = example.answer_spans[max_pos]
+    return all_dev_all_ans,all_dev_top1_ans
